@@ -1,0 +1,1 @@
+V4 - experimental: stronger warped pillar silhouettes, mixed distance metrics, taller broader birches. Recompile with existing GitHub Action. The worldgen island parameters are unchanged. Not compiled or game-tested.

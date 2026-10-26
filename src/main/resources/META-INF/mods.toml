@@ -1,0 +1,20 @@
+modLoader="javafml"
+loaderVersion="[40,)"
+license="All Rights Reserved"
+[[mods]]
+modId="twmtw_pillars"
+version="0.1.0"
+displayName="TWMTW Pillars - 1.18.2"
+description='''Independent procedural sea pillar feature for TWMTW datapack adaptation.'''
+[[dependencies.twmtw_pillars]]
+modId="forge"
+mandatory=true
+versionRange="[40,)"
+ordering="NONE"
+side="BOTH"
+[[dependencies.twmtw_pillars]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.18.2,1.18.3)"
+ordering="NONE"
+side="BOTH"

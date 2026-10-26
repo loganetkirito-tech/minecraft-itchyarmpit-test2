@@ -1,0 +1,20 @@
+plugins {
+    id 'eclipse'
+    id 'maven-publish'
+    id 'net.minecraftforge.gradle' version '5.1.+'
+}
+version = '0.1.0'
+group = 'fr.twmtw.pillars'
+archivesBaseName = 'twmtw-pillars-1.18.2'
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+minecraft {
+    mappings channel: 'official', version: '1.18.2'
+    runs {
+        client { workingDirectory project.file('run'); mods { twmtw_pillars { source sourceSets.main } } }
+        server { workingDirectory project.file('run'); mods { twmtw_pillars { source sourceSets.main } } }
+    }
+}
+repositories { mavenCentral() }
+dependencies { minecraft 'net.minecraftforge:forge:1.18.2-40.3.12' }
+jar { manifest { attributes(['Specification-Title':'twmtw-pillars','Specification-Vendor':'Community adaptation', 'Specification-Version':'1', 'Implementation-Title':project.name, 'Implementation-Version':project.jar.archiveVersion, 'Implementation-Vendor':'Community adaptation']) } }
+jar.finalizedBy('reobfJar')
