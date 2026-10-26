@@ -3,10 +3,8 @@ package fr.twmtw.pillars;
 import com.mojang.serialization.Codec;
 import java.util.Random;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.world.level.WorldGenLevel;
 import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.VineBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.levelgen.feature.Feature;
@@ -14,131 +12,163 @@ import net.minecraft.world.level.levelgen.feature.FeaturePlaceContext;
 import net.minecraft.world.level.levelgen.feature.configurations.NoneFeatureConfiguration;
 
 /**
- * Column-by-column pillar generation inspired by BWG's PillarFeature geometry.
- * Independently written 1.18.2 implementation, not an exact source port.
+ * Independently developed, Minecraft 1.18.2 sea columns.
+ * Primarily upright cylinders with smoothly undulating radius, occasional low arches.
+ * Nothing here overrides the global Tectonic density functions.
  */
 public class SeaPillarFeature extends Feature<NoneFeatureConfiguration> {
     public SeaPillarFeature(Codec<NoneFeatureConfiguration> codec) { super(codec); }
 
-    private static double smooth(double x) { return x * x * (3 - 2 * x); }
-    private static double mix(double a, double b, double t) { return a + (b - a) * t; }
-    private static double hash(int x, int y, int z, int salt) {
-        long n = x * 374761393L + y * 668265263L + z * 1442695041L + salt * 1274126177L;
-        n = (n ^ (n >>> 13)) * 1274126177L;
-        n ^= (n >>> 16);
-        return ((n & 0x7fffffffL) / 1073741823.5) - 1;
-    }
-    // Smooth value noise, sampled at multiple spatial scales.
-    private static double noise(double x, double y, double z, int salt) {
-        int ix = (int)Math.floor(x), iy = (int)Math.floor(y), iz = (int)Math.floor(z);
-        double fx = smooth(x - ix), fy = smooth(y - iy), fz = smooth(z - iz);
-        double a = mix(hash(ix,iy,iz,salt),hash(ix+1,iy,iz,salt),fx);
-        double b = mix(hash(ix,iy,iz+1,salt),hash(ix+1,iy,iz+1,salt),fx);
-        double c = mix(hash(ix,iy+1,iz,salt),hash(ix+1,iy+1,iz,salt),fx);
-        double d = mix(hash(ix,iy+1,iz+1,salt),hash(ix+1,iy+1,iz+1,salt),fx);
-        return mix(mix(a,b,fz),mix(c,d,fz),fy);
+    private static final double TAU = Math.PI * 2.0;
+    private static double clamp(double x, double lo, double hi) { return Math.max(lo, Math.min(hi, x)); }
+
+    private static final class Pillar {
+        final int x, z, sea, floor, top;
+        final double base, waveA, waveB, phaseA, phaseB, cyclesA, cyclesB, angle, faceting;
+        Pillar(int x, int z, int sea, int floor, int top, int radius, Random random) {
+            this.x=x;this.z=z;this.sea=sea;this.floor=floor;this.top=top;
+            base=radius;
+            waveA=0.65+random.nextDouble()*Math.min(2.5, radius*0.19);
+            waveB=0.25+random.nextDouble()*0.9;
+            phaseA=random.nextDouble()*TAU;phaseB=random.nextDouble()*TAU;
+            cyclesA=0.9+random.nextDouble()*0.7;cyclesB=1.6+random.nextDouble()*1.1;
+            angle=random.nextDouble()*TAU;
+            faceting=random.nextFloat()<0.10f ? 0.65 : 0.0; // minority angular variants
+        }
+        double radiusAt(int y) {
+            double t=clamp((y-floor)/(double)Math.max(1,top-floor),0,1);
+            return Math.max(base*0.69,base
+                + waveA*Math.sin(TAU*cyclesA*t+phaseA)
+                + waveB*Math.sin(TAU*cyclesB*t+phaseB));
+        }
+        double normalizedDistance(int dx,int dz) {
+            double euclidean=Math.sqrt((double)dx*dx+(double)dz*dz);
+            if(faceting==0.0) return euclidean;
+            double a=Math.atan2(dz,dx)-angle;
+            double octagon=(Math.max(Math.abs(Math.cos(a)),Math.abs(Math.sin(a)))+0.17)*euclidean;
+            return euclidean*(1-faceting)+octagon*faceting;
+        }
     }
 
     @Override
-    public boolean place(FeaturePlaceContext<NoneFeatureConfiguration> ctx) {
-        WorldGenLevel world = ctx.level();
-        Random random = ctx.random();
-        BlockPos origin = ctx.origin();
-        int cx=origin.getX(), cz=origin.getZ(), sea=world.getSeaLevel();
-        int centerFloor=world.getHeight(Heightmap.Types.OCEAN_FLOOR_WG,cx,cz)-1;
-        if (centerFloor >= sea-4 || centerFloor <= world.getMinBuildHeight()+6) return false;
-        if (world.getBlockState(new BlockPos(cx,centerFloor+1,cz)).getFluidState().isEmpty()) return false;
+    public boolean place(FeaturePlaceContext<NoneFeatureConfiguration> context) {
+        WorldGenLevel world=context.level();
+        Random random=context.random();
+        BlockPos origin=context.origin();
+        int sea=world.getSeaLevel();
+        int cx=origin.getX(),cz=origin.getZ();
+        int floor=world.getHeight(Heightmap.Types.OCEAN_FLOOR_WG,cx,cz)-1;
+        if(floor>=sea-5 || floor<=world.getMinBuildHeight()+4) return false;
+        if(world.getBlockState(new BlockPos(cx,floor+1,cz)).getFluidState().isEmpty()) return false;
 
-        int radius=8+random.nextInt(13);              // original TWMTW range 7..20
-        int heightAbove=28+random.nextInt(62);        // deliberate ocean-depth correction
-        int targetTop=Math.min(world.getMaxBuildHeight()-38,sea+heightAbove);
-        int salt=random.nextInt(1000000);
-        double freq=0.022+random.nextDouble()*0.045;
-        double smallScale=0.18+random.nextDouble()*0.17;
-        double phase=random.nextDouble()*6.283185307;
-        int reach=radius+7, written=0;
-        BlockPos.MutableBlockPos p=new BlockPos.MutableBlockPos();
+        // Ordinary pillars: 5..16 radius, 35..100 blocks above water.
+        int radius=5+random.nextInt(12);
+        int top=Math.min(world.getMaxBuildHeight()-38,sea+35+random.nextInt(66));
+        Pillar primary=new Pillar(cx,cz,sea,floor,top,radius,random);
 
-        // Determine each (x,z) column separately. BWG similarly reads the
-        // OCEAN_FLOOR_WG height independently for each candidate column.
-        for(int dx=-reach;dx<=reach;dx++) for(int dz=-reach;dz<=reach;dz++) {
-            int x=cx+dx,z=cz+dz;
-            int floor=world.getHeight(Heightmap.Types.OCEAN_FLOOR_WG,x,z)-1;
-            double theta=Math.atan2(dz,dx);
-            double d=Math.sqrt(dx*dx+dz*dz);
-            double longWave=noise(x*0.055,0,z*0.055,salt+3);
-            double outline=radius*(1+0.23*Math.sin(theta*3+phase)
-                                    +0.12*Math.cos(theta*6-phase)
-                                    +0.13*longWave);
-            if (d>outline) continue;
-            // Contours change by height through low-frequency 3D noise,
-            // not by forcing a constant-radius cylinder or a circular cap.
-            double topIrregularity=3.0*noise(x*0.075,0,z*0.075,salt+71);
-            int top=Math.min(world.getMaxBuildHeight()-35,
-                             targetTop+(int)Math.round(topIrregularity));
-            for(int y=Math.max(world.getMinBuildHeight()+2,floor-4);y<=top;y++){
-                double n=noise(x*freq,y*freq,z*freq,salt);
-                double n2=noise(x*freq*2.2,y*freq*1.4,z*freq*2.2,salt+13);
-                double radialAllowance=outline*(0.76+smallScale*(n+1)*0.5)+n2*2.4;
-                if(d>radialAllowance) continue;
-                p.set(x,y,z);
-                BlockState old=world.getBlockState(p);
-                if(!old.isAir() && old.getFluidState().isEmpty()
-                    && !old.getMaterial().isReplaceable()) continue;
-                boolean edge=d>radialAllowance-2.4;
-                BlockState block=Blocks.STONE.defaultBlockState();
-                if(edge && random.nextInt(13)==0) block=Blocks.MOSSY_COBBLESTONE.defaultBlockState();
-                else if(edge && random.nextInt(20)==0) block=Blocks.MOSS_BLOCK.defaultBlockState();
-                world.setBlock(p,block,2);
-                written++;
-            }
-            // Only the top surface of a completed column gets vegetation.
-            p.set(x,top,z);
-            BlockState b=world.getBlockState(p);
-            if ((b.is(Blocks.STONE)||b.is(Blocks.MOSSY_COBBLESTONE)) &&
-                 random.nextFloat()<0.58f) {
-                world.setBlock(p,random.nextInt(4)==0
-                    ? Blocks.GRASS_BLOCK.defaultBlockState()
-                    : Blocks.MOSS_BLOCK.defaultBlockState(),2);
+        // All formation geometry stays circular and largely vertical, no mushroom caps.
+        // At most one carefully controlled second column; optional rock arch above sea.
+        boolean pair=random.nextInt(34)==0; // rare per placed pillar
+        Pillar secondary=null;
+        if(pair){
+            double angle=random.nextDouble()*TAU;
+            int distance=radius+9+random.nextInt(6);
+            int x2=cx+(int)Math.round(Math.cos(angle)*distance);
+            int z2=cz+(int)Math.round(Math.sin(angle)*distance);
+            int floor2=world.getHeight(Heightmap.Types.OCEAN_FLOOR_WG,x2,z2)-1;
+            if(floor2<sea-5 && floor2>world.getMinBuildHeight()+4 &&
+                    !world.getBlockState(new BlockPos(x2,floor2+1,z2)).getFluidState().isEmpty()) {
+                secondary=new Pillar(x2,z2,sea,floor2,
+                     Math.min(world.getMaxBuildHeight()-38,sea+34+random.nextInt(51)),
+                     5+random.nextInt(7),random);
             }
         }
-        if(written==0) return false;
 
-        // A few trees per pillar, on verified high solid summits, never on water.
-        int attempts=(radius>=14?5:3);
-        if(random.nextInt(5)==0) attempts=0; // some bare pillars
-        for(int i=0;i<attempts;i++){
-            int dx=random.nextInt(radius*2-4)-(radius-2);
-            int dz=random.nextInt(radius*2-4)-(radius-2);
-            int x=cx+dx,z=cz+dz;
-            int ground=world.getHeight(Heightmap.Types.WORLD_SURFACE_WG,x,z)-1;
-            if(ground<sea+16 || ground>world.getMaxBuildHeight()-36) continue;
-            p.set(x,ground,z);
-            BlockState below=world.getBlockState(p);
-            if(!below.is(Blocks.MOSS_BLOCK) && !below.is(Blocks.GRASS_BLOCK)) continue;
-            int treeH=17+random.nextInt(15);
-            boolean clear=true;
-            for(int y=ground+1;y<=ground+treeH+4;y++){
-                p.set(x,y,z);
-                if(!world.getBlockState(p).isAir()){clear=false;break;}
+        boolean built=buildPillar(world,primary,random);
+        if(secondary!=null){
+            built |= buildPillar(world,secondary,random);
+            // Bridge spans 10..16 blocks above water; hole underneath remains open.
+            int bridgeY=sea+11+random.nextInt(6);
+            int dx=secondary.x-primary.x, dz=secondary.z-primary.z;
+            int steps=Math.max(Math.abs(dx),Math.abs(dz));
+            for(int i=0;i<=steps;i++){
+                double t=i/(double)Math.max(1,steps);
+                int x=(int)Math.round(primary.x+dx*t),z=(int)Math.round(primary.z+dz*t);
+                for(int ox=-2;ox<=2;ox++)for(int oz=-2;oz<=2;oz++)for(int oy=0;oy<4;oy++){
+                    if(ox*ox+oz*oz>5)continue;
+                    BlockPos p=new BlockPos(x+ox,bridgeY+oy,z+oz);
+                    if(world.getBlockState(p).isAir() || !world.getBlockState(p).getFluidState().isEmpty())
+                        world.setBlock(p,Blocks.STONE.defaultBlockState(),2);
+                }
             }
-            if(!clear) continue;
-            for(int y=ground+1;y<=ground+treeH;y++){
-                p.set(x,y,z);
-                world.setBlock(p,Blocks.BIRCH_LOG.defaultBlockState(),2);
+        }
+        return built;
+    }
+
+    private boolean buildPillar(WorldGenLevel world,Pillar pillar,Random random){
+        int reach=(int)Math.ceil(pillar.base+pillar.waveA+pillar.waveB+2);
+        BlockPos.MutableBlockPos p=new BlockPos.MutableBlockPos();
+        boolean placed=false;
+        // Horizontal cross-sections, with a radius depending ONLY on elevation.
+        for(int y=pillar.floor;y<=pillar.top;y++){
+            double r=pillar.radiusAt(y);
+            for(int dx=-reach;dx<=reach;dx++)for(int dz=-reach;dz<=reach;dz++){
+                if(pillar.normalizedDistance(dx,dz)>r)continue;
+                p.set(pillar.x+dx,y,pillar.z+dz);
+                BlockState previous=world.getBlockState(p);
+                if(!previous.isAir() && previous.getFluidState().isEmpty()
+                    && !previous.getMaterial().isReplaceable())continue;
+                double d=pillar.normalizedDistance(dx,dz);
+                BlockState stone=Blocks.STONE.defaultBlockState();
+                if(d>=r-1.6 && random.nextInt(12)==0)stone=Blocks.MOSSY_COBBLESTONE.defaultBlockState();
+                world.setBlock(p,stone,2);placed=true;
             }
-            int crown=ground+treeH-1;
+        }
+        // Surface is almost flat and follows the same cylinder radius, not a projecting disc.
+        for(int dx=-reach;dx<=reach;dx++)for(int dz=-reach;dz<=reach;dz++){
+            if(pillar.normalizedDistance(dx,dz)>pillar.radiusAt(pillar.top)-1)continue;
+            p.set(pillar.x+dx,pillar.top,pillar.z+dz);
+            if(world.getBlockState(p).is(Blocks.STONE) && random.nextFloat()<0.72f)
+                world.setBlock(p,random.nextFloat()<0.35f?Blocks.GRASS_BLOCK.defaultBlockState():Blocks.MOSS_BLOCK.defaultBlockState(),2);
+        }
+        decorateTop(world,pillar,random);
+        return placed;
+    }
+
+    private void decorateTop(WorldGenLevel world,Pillar pillar,Random random){
+        int desired=pillar.base<=7?(random.nextInt(3)==0?1:0)
+                  :pillar.base<=11?1+random.nextInt(3):2+random.nextInt(4);
+        if(random.nextInt(7)==0)desired=0;
+        int successes=0,tries=desired*10;
+        BlockPos.MutableBlockPos p=new BlockPos.MutableBlockPos();
+        for(int attempt=0;attempt<tries && successes<desired;attempt++){
+            int dx=random.nextInt((int)(pillar.base*2+1))-(int)pillar.base;
+            int dz=random.nextInt((int)(pillar.base*2+1))-(int)pillar.base;
+            if(pillar.normalizedDistance(dx,dz)>pillar.radiusAt(pillar.top)-3.5)continue;
+            int x=pillar.x+dx,z=pillar.z+dz,y=pillar.top;
+            p.set(x,y,z);
+            if(!world.getBlockState(p).is(Blocks.GRASS_BLOCK) && !world.getBlockState(p).is(Blocks.MOSS_BLOCK))continue;
+            int height=15+random.nextInt(14);
+            boolean free=true;
+            for(int t=1;t<=height+4;t++){
+                p.set(x,y+t,z);
+                if(!world.getBlockState(p).isAir()){free=false;break;}
+            }
+            if(!free)continue;
+            for(int t=1;t<=height;t++){
+                p.set(x,y+t,z);world.setBlock(p,Blocks.BIRCH_LOG.defaultBlockState(),2);
+            }
+            int crown=y+height;
             for(int oy=-3;oy<=3;oy++){
-                int r=(oy==-3||oy==3)?2:(oy==-2||oy==2?4:5);
-                for(int ax=-r;ax<=r;ax++) for(int az=-r;az<=r;az++){
-                    double dist=ax*ax+az*az;
-                    if(dist>r*r+noise((x+ax)*0.4,crown+oy,(z+az)*0.4,salt+25)*5) continue;
+                int rr=(Math.abs(oy)==3)?2:((Math.abs(oy)==2)?3:4);
+                for(int ax=-rr;ax<=rr;ax++)for(int az=-rr;az<=rr;az++){
+                    if(ax*ax+az*az>rr*rr+random.nextInt(5)-2)continue;
                     p.set(x+ax,crown+oy,z+az);
                     if(world.getBlockState(p).isAir())
                         world.setBlock(p,Blocks.OAK_LEAVES.defaultBlockState(),2);
                 }
             }
+            successes++;
         }
-        return true;
     }
 }

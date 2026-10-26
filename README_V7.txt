@@ -1,0 +1,1 @@
+V7: Mostly circular cylinders with radius that varies smoothly by altitude; rare low arches; trees tied to pillar tops. Forge 1.18.2. Use with V7 datapack. Compilation / in-game behavior not yet verified. Retains TWMTW islands global worldgen from V6.
