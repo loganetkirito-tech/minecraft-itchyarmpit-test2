@@ -1,0 +1,1 @@
+V5: Continuous Euclidean outline, broad asymmetric lobes, non-square rock walls, stronger horizontal drift, sparse crowns and fewer pillar overlaps. Experimental, not an exact port of the BWG implementation. Keep Tectonic Island noise unchanged.

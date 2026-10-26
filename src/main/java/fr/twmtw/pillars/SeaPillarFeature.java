@@ -30,12 +30,18 @@ public class SeaPillarFeature extends Feature<NoneFeatureConfiguration> {
 
         int topY = Math.min(world.getMaxBuildHeight() - 36, sea + 22 + random.nextInt(79));
         int height = topY - floorY;
-        int radius = 9 + random.nextInt(11); // 9-19; retain a few narrow spires
+        int radius = 8 + random.nextInt(12); // 8-19, keep wide and narrow pillars
         double phase = random.nextDouble() * Math.PI * 2;
         double twist = 1.0 + random.nextDouble() * 4.0;
         double waist = 0.08 + random.nextDouble() * 0.28;
-        double randomMetric = random.nextDouble();
-        int reach = radius + 12;
+        // Broad independent lobes: unlike Chebyshev these never create square cliffs.
+        double lobeA = 2.0 + random.nextDouble() * 2.0;
+        double lobeB = 1.0 + random.nextDouble() * 2.0;
+        double lobeC = 4.0 + random.nextDouble() * 3.0;
+        double leanX = (random.nextDouble() - 0.5) * 13.0;
+        double leanZ = (random.nextDouble() - 0.5) * 13.0;
+        double shelfHeight = 0.78 + random.nextDouble() * 0.12;
+        int reach = radius + 20;
         // Check nearby high ground: avoid turning adjacent pillars into continuous walls.
         // Deterministic per-chunk screening is handled by lower placement frequency.
         int written = 0;
@@ -45,25 +51,24 @@ public class SeaPillarFeature extends Feature<NoneFeatureConfiguration> {
         // Small angular harmonics and offset drift make the cylinder asymmetric.
         for (int y = floorY; y <= topY; y++) {
             double t = (y - floorY) / (double) height;
-            double centerX = Math.sin(phase + t * 3.5) * twist * t;
-            double centerZ = Math.cos(phase * 1.3 + t * 3.0) * twist * t;
+            double centerX = leanX * t + Math.sin(phase + t * 4.1) * twist * t;
+            double centerZ = leanZ * t + Math.cos(phase * 1.3 + t * 3.7) * twist * t;
             double mid = Math.sin(Math.PI * t);
-            double baseRadius = radius * (1.0 - waist * mid + 0.12 * Math.sin(t * 6 + phase));
-            // Broad shelf near the summit, with nearly level top.
-            if (t > 0.89) baseRadius *= 0.94;
+            double baseRadius = radius * (1.0 - waist * mid + 0.15 * Math.sin(t * 8.2 + phase));
+            // A broad, flat crown, but without a perfectly circular edge.
+            if (t > shelfHeight) baseRadius *= 1.0 + 0.08 * (t - shelfHeight) / (1.0 - shelfHeight);
             for (int dx = -reach; dx <= reach; dx++) {
                 for (int dz = -reach; dz <= reach; dz++) {
                     double x = dx - centerX, z = dz - centerZ;
                     double angle = Math.atan2(z, x);
-                    double modulation = 1 + 0.16 * Math.sin(angle * 5 + phase + t * 1.8)
-                                          + 0.11 * Math.cos(angle * 9 - phase * 0.5 + t * 2.4)
-                                          + 0.05 * Math.sin(angle * 13 + t * 6 + phase);
-                    // Mixed distance metrics create alternating rounded and angular cliffs.
-                    double euclidean = Math.sqrt(x*x + z*z);
-                    double chebyshev = Math.max(Math.abs(x), Math.abs(z));
-                    double manhattan = (Math.abs(x) + Math.abs(z)) * 0.70710678;
-                    double distance = randomMetric < 0.76 ? euclidean : (randomMetric < 0.91 ? chebyshev : manhattan);
-                    double r = baseRadius * modulation;
+                    // Radial noise is continuous in angle and altitude, which gives
+                    // organic, deeply grooved rock rather than square apartment walls.
+                    double modulation = 1.0
+                        + 0.24 * Math.sin(angle * lobeA + phase + t * 3.8)
+                        + 0.13 * Math.cos(angle * lobeB - phase * 0.6 - t * 5.0)
+                        + 0.09 * Math.sin(angle * lobeC + phase * 1.7 + t * 9.0);
+                    double distance = Math.sqrt(x*x + z*z);
+                    double r = Math.max(2.5, baseRadius * modulation);
                     if (distance > r) continue;
                     double d = x*x + z*z;
                     probe.set(cx + dx, y, cz + dz);
@@ -82,8 +87,8 @@ public class SeaPillarFeature extends Feature<NoneFeatureConfiguration> {
         if (written == 0) return false;
 
         // Match the summit drift; only plant where this feature generated solid stone.
-        double summitX = Math.sin(phase + 3.5) * twist;
-        double summitZ = Math.cos(phase * 1.3 + 3.0) * twist;
+        double summitX = leanX + Math.sin(phase + 4.1) * twist;
+        double summitZ = leanZ + Math.cos(phase * 1.3 + 3.7) * twist;
         int sx = cx + (int)Math.round(summitX), sz = cz + (int)Math.round(summitZ);
         int innerRadius = Math.max(4, radius - 4);
         for (int dx = -innerRadius; dx <= innerRadius; dx++) {
@@ -93,13 +98,13 @@ public class SeaPillarFeature extends Feature<NoneFeatureConfiguration> {
                 probe.set(sx + dx, topY, sz + dz);
                 BlockState b = world.getBlockState(probe);
                 if (!b.is(Blocks.STONE) && !b.is(Blocks.MOSSY_COBBLESTONE) && !b.is(Blocks.MOSS_BLOCK)) continue;
-                if (random.nextFloat() < 0.76f) world.setBlock(probe, random.nextFloat() < 0.25f ? Blocks.MOSS_BLOCK.defaultBlockState() : Blocks.GRASS_BLOCK.defaultBlockState(), 2);
+                if (random.nextFloat() < 0.59f) world.setBlock(probe, random.nextFloat() < 0.25f ? Blocks.MOSS_BLOCK.defaultBlockState() : Blocks.GRASS_BLOCK.defaultBlockState(), 2);
             }
         }
 
         // Tree generation is coupled to THIS pillar, never the water surface.
         // A small set of tall birches, deliberately not a continuous forest canopy.
-        int trees = (radius >= 14 ? 2 : 1) + random.nextInt(radius >= 14 ? 4 : 3);
+        int trees = random.nextInt(radius >= 14 ? 6 : 4); // bare summits are possible
         for (int i = 0; i < trees; i++) {
             int dx = random.nextInt(Math.max(1, innerRadius * 2 - 6)) - (innerRadius - 3);
             int dz = random.nextInt(Math.max(1, innerRadius * 2 - 6)) - (innerRadius - 3);
